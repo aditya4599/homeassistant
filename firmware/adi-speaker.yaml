@@ -1,0 +1,304 @@
+###############################################################################
+# ADI speaker: Waveshare ESP32-S3-AUDIO-Board as an Echo-Dot-style device that
+# talks to YOUR backend (no Home Assistant).
+#
+#   wake word (on device) -> record -> WebSocket -> ADI backend
+#   (STT -> LLM/tools -> TTS) -> reply audio -> speaker
+#
+# Hardware/audio setup is adapted from MichalZaniewicz/esphome-waveshare-esp32-s3-audio-va
+# (v1.0.1, MIT). Everything Home-Assistant-specific (voice_assistant, api, timers,
+# media player) is removed on purpose.
+###############################################################################
+
+substitutions:
+  name: adi-speaker
+  friendly_name: "ADI Speaker"
+  device_id: esp32-desk          # must match the id in DEVICE_TOKENS on the backend
+  backend_port: "8000"
+  volume: "0.7"                  # 0.0 - 1.0 (the little speaker distorts near the top)
+
+  # Waveshare ESP32-S3-AUDIO-Board pins (see the original repo's docs/HARDWARE.md)
+  i2s_mclk: GPIO12
+  i2s_bclk: GPIO13
+  i2s_lrclk: GPIO14
+  i2s_din: GPIO15
+  i2s_dout: GPIO16
+  i2c_sda: GPIO11
+  i2c_scl: GPIO10
+  led_pin: GPIO38
+  led_num: "7"
+  amp_ctrl: "8"                  # TCA9555 EXIO8 = PA_EN, active high
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  min_version: 2025.8.0
+  on_boot:
+    priority: -100
+    then:
+      - speaker.volume_set:
+          id: i2s_audio_speaker
+          volume: ${volume}
+      - micro_wake_word.start:
+      - light.turn_on: {id: status_ring, brightness: 100%, effect: "ADI Ring"}
+
+esp32:
+  board: esp32-s3-devkitc-1
+  cpu_frequency: 240MHz
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    version: recommended
+    sdkconfig_options:
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+      CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB: "y"
+      CONFIG_SPIRAM_RODATA: "y"
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: "y"
+      CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC: "y"
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none          # audio streaming hates Wi-Fi power saving
+  reboot_timeout: 10min
+
+logger:
+  level: DEBUG
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+i2c:
+  - id: internal_i2c
+    sda: ${i2c_sda}
+    scl: ${i2c_scl}
+    scan: true
+    frequency: 100kHz
+
+tca9555:
+  id: ioexp
+  i2c_id: internal_i2c
+  address: 0x20
+
+# Two I2S buses over the shared BCLK/LRCLK pins: the mic bus is the clock master
+# (always capturing for the wake word), the speaker bus is a slave. See the original
+# repo's README "How the shared I2S bus is handled".
+i2s_audio:
+  - id: i2s_input
+    i2s_mclk_pin: ${i2s_mclk}
+    i2s_bclk_pin:
+      number: ${i2s_bclk}
+      allow_other_uses: true
+    i2s_lrclk_pin:
+      number: ${i2s_lrclk}
+      allow_other_uses: true
+  - id: i2s_output
+    i2s_bclk_pin:
+      number: ${i2s_bclk}
+      allow_other_uses: true
+    i2s_lrclk_pin:
+      number: ${i2s_lrclk}
+      allow_other_uses: true
+
+audio_adc:
+  - platform: es7210
+    id: adc_mic
+    i2c_id: internal_i2c
+    bits_per_sample: 16bit
+    sample_rate: 16000
+    mic_gain: 24db
+
+audio_dac:
+  - platform: es8311
+    id: es8311_dac
+    i2c_id: internal_i2c
+
+microphone:
+  - platform: i2s_audio
+    id: i2s_mics
+    i2s_audio_id: i2s_input
+    i2s_din_pin: ${i2s_din}
+    adc_type: external
+    pdm: false
+    channel: right              # ES7210 dual-mic board; send one clean mic channel
+    sample_rate: 16000          # explicit backend/STT rate
+    bits_per_sample: 16bit      # must stay 16-bit, see original repo notes
+
+speaker:
+  - platform: i2s_audio
+    id: i2s_audio_speaker
+    i2s_audio_id: i2s_output
+    i2s_dout_pin: ${i2s_dout}
+    i2s_mode: secondary          # slave to the mic bus clock
+    dac_type: external
+    audio_dac: es8311_dac
+    sample_rate: 16000           # backend replies are 16 kHz PCM
+    bits_per_sample: 16bit
+    timeout: never
+    buffer_duration: 500ms
+
+  # TTS and Spotify share the speaker through ESPHome's mixer. The I2S speaker and the
+  # microphone clocking stay exactly as before (16 kHz); Spotify's 44.1 kHz stereo is
+  # resampled to 16 kHz first (the mixer needs one sample rate).
+  - platform: mixer
+    id: adi_mixer
+    output_speaker: i2s_audio_speaker
+    task_stack_in_psram: true
+    source_speakers:
+      - id: tts_input              # adi_voice replies
+      - id: music_input            # Spotify Connect (ducked while ADI is talking/listening)
+        buffer_duration: 300ms
+
+  - platform: resampler
+    id: music_resampler
+    output_speaker: music_input
+    sample_rate: 16000
+    bits_per_sample: 16
+    buffer_duration: 300ms
+    task_stack_in_psram: true
+
+switch:
+  - platform: gpio
+    id: amp_enable
+    name: Amplifier
+    pin:
+      tca9555: ioexp
+      number: ${amp_ctrl}
+      inverted: false
+    restore_mode: ALWAYS_OFF
+
+micro_wake_word:
+  id: mww
+  microphone: i2s_mics
+  stop_after_detection: false
+  models:
+    - model: https://github.com/esphome/micro-wake-word-models/raw/main/models/v2/alexa.json
+      id: alexa
+    - model: https://github.com/esphome/micro-wake-word-models/raw/main/models/v2/okay_nabu.json
+      id: okay_nabu
+  vad:
+    model: https://github.com/esphome/micro-wake-word-models/raw/main/models/v2/vad.json
+  on_wake_word_detected:
+    - adi_voice.start:
+
+external_components:
+  - source:
+      type: local
+      path: components
+
+adi_voice:
+  id: adi
+  microphone: i2s_mics
+  speaker: tts_input                # via the mixer, so Spotify can share the speaker
+  micro_wake_word: mww
+  host: !secret backend_host
+  port: ${backend_port}
+  device_id: ${device_id}
+  device_name: ${friendly_name}
+  token: !secret device_token
+  silence_ms: 1200               # this much silence ends your sentence
+  max_record_seconds: 12
+  on_state:
+    - script.execute:
+        id: ring
+        state: !lambda return state;
+
+# Spotify Connect: shows up in the Spotify app as "${friendly_name}".
+adi_spotify:
+  id: spotify
+  speaker: music_resampler
+  name: ${friendly_name}
+  client_id: !secret spotify_client_id         # your Spotify developer app (secrets.yaml)
+  client_secret: !secret spotify_client_secret
+  bitrate: 96
+  initial_volume: 0.5
+  on_state:
+    - script.execute: amp_update
+  
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: status_ring
+    name: "Status Ring"
+    pin: ${led_pin}
+    num_leds: ${led_num}
+    chipset: WS2812
+    rgb_order: RGB
+    gamma_correct: 1.0              # colours and brightness are shaped in adi_ring.h
+    default_transition_length: 150ms
+    effects:
+      # The only thing that drives the ring. Pattern comes from ring_mode (set by the "ring"
+      # script from the voice state): listening = steady light blue; Spotify playing = rainbow
+      # that follows the music (level measured in adi_spotify from the Spotify PCM, never from
+      # the microphone); everything else = plain rotating rainbow. Runs on the main loop,
+      # 7 LEDs every 40 ms, no allocation, and never touches cspot or the audio path.
+      - addressable_lambda:
+          name: "ADI Ring"
+          update_interval: 40ms
+          lambda: |-
+            static adi_spotify::AdiRing ring;
+            uint8_t px[adi_spotify::RING_LEDS][3];
+            ring.render(millis(), id(ring_mode), id(spotify).get_level(), id(spotify).is_playing(), px);
+            const int n = it.size() < adi_spotify::RING_LEDS ? it.size() : adi_spotify::RING_LEDS;
+            for (int i = 0; i < n; i++) it[i] = Color(px[i][0], px[i][1], px[i][2]);
+
+globals:
+  - id: voice_speaking
+    type: bool
+    initial_value: "false"
+  # 0 normal (idle/connecting), 1 listening, 2 processing/speaking, 3 error. Read by "ADI Ring".
+  - id: ring_mode
+    type: int
+    initial_value: "0"
+
+script:
+  - id: amp_update
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: return id(voice_speaking) || id(spotify).is_playing();
+          then:
+            - switch.turn_on: amp_enable
+          else:
+            - switch.turn_off: amp_enable
+
+  - id: ring
+    mode: restart
+    parameters:
+      state: string
+    then:
+      # Amplifier: on while ADI speaks OR Spotify plays (see amp_update).
+      - globals.set:
+          id: voice_speaking
+          value: !lambda return state == "speaking";
+      - script.execute: amp_update
+      # Duck Spotify while ADI listens/thinks/talks so the mic and the reply stay clear.
+      - if:
+          condition:
+            lambda: return state == "listening" || state == "processing" || state == "speaking";
+          then:
+            - mixer_speaker.apply_ducking:
+                id: music_input
+                decibel_reduction: 30
+                duration: 0.15s
+          else:
+            - mixer_speaker.apply_ducking:
+                id: music_input
+                decibel_reduction: 0
+                duration: 0.5s
+      # Ring: just tell the "ADI Ring" effect which mode applies. Listening always wins.
+      - globals.set:
+          id: ring_mode
+          value: !lambda |-
+            if (state == "listening") return 1;
+            if (state == "processing" || state == "speaking") return 2;
+            if (state == "error") return 3;
+            return 0;
