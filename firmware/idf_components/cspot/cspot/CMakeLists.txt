@@ -1,0 +1,36 @@
+cmake_minimum_required(VERSION 3.5)
+
+project(cspot)
+
+# Configurable options
+set(CSPOT_EXTERNAL_BELL "" CACHE STRING "External bell library target name, optional")
+
+# CMake options
+set(CMAKE_CXX_STANDARD 20)
+
+if(MSVC)
+	add_compile_definitions(NOMINMAX _WINSOCK_DEPRECATED_NO_WARNINGS _CRT_SECURE_NO_WARNINGS)
+	add_definitions(/wd4068 /wd4244 /wd4018 /wd4101 /wd4102 /wd4142 /wd4996)
+endif()
+
+# Main library sources
+file(GLOB SOURCES "src/*.cpp" "src/*.c")
+
+# Use externally specified bell library or the submodule
+if(CSPOT_EXTERNAL_BELL)
+    list(APPEND EXTRA_LIBS ${CSPOT_EXTERNAL_BELL})
+else()
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/bell)
+    list(APPEND EXTRA_LIBS bell)
+endif()
+
+# ADI PATCH: protobuf sources are pre-generated (nanopb 0.4.6 bundled in bell) into
+# protobuf_gen/ because the ESPHome ESP-IDF environment has no protoc / python protobuf.
+file(GLOB PROTO_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/protobuf_gen/protobuf/*.c")
+
+add_library(cspot STATIC ${SOURCES} ${PROTO_SRCS})
+# PUBLIC to propagate includes from bell to cspot dependents
+target_compile_definitions(bell PUBLIC PB_ENABLE_MALLOC)
+target_compile_definitions(bell PUBLIC PB_FIELD_32BIT)
+target_link_libraries(cspot PUBLIC ${EXTRA_LIBS})
+target_include_directories(cspot PUBLIC "include" "${CMAKE_CURRENT_SOURCE_DIR}/protobuf_gen" ${NANOPB_INCLUDE_DIRS} ${EXTRA_INCLUDES})
