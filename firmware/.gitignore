@@ -1,0 +1,6 @@
+# Real Wi-Fi / token / Spotify credentials. Copy secrets.example.yaml instead.
+secrets.yaml
+# ESPHome build output and machine-specific state.
+.esphome/
+.venv/
+__pycache__/
