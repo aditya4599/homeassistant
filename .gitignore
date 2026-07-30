@@ -1,0 +1,54 @@
+# ---------------------------------------------------------------------------
+# Secrets and local credentials (never commit these)
+# ---------------------------------------------------------------------------
+firmware/secrets.yaml
+backend/.env
+backend/.env.*
+!backend/.env.example
+.spotify_token.json
+.spotify_token.json.tmp
+*.token.json
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---------------------------------------------------------------------------
+# ESPHome / ESP-IDF build output and machine-specific state
+# ---------------------------------------------------------------------------
+firmware/.esphome/
+firmware/**/build/
+firmware/sdkconfig*
+firmware/dependencies.lock
+*.elf
+*.bin
+*.map
+
+# ---------------------------------------------------------------------------
+# Backend runtime data (recordings, local databases)
+# ---------------------------------------------------------------------------
+backend/debug_audio/
+backend/*.wav
+backend/*.db
+backend/*.sqlite3
+*.log
+
+# ---------------------------------------------------------------------------
+# OS / editor / archive junk
+# ---------------------------------------------------------------------------
+.DS_Store
+._*
+__MACOSX/
+/.idea/
+/.vscode/
+/*.zip
