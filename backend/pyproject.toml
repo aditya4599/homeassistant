@@ -1,0 +1,7 @@
+# Tool configuration only. Dependencies live in requirements.txt / requirements-dev.txt.
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
