@@ -1,0 +1,68 @@
+# Default:            docker compose up --build          (API only, mock providers, SQLite)
+# With PostgreSQL:    docker compose --profile db up --build
+#                     and set in .env:
+#                     DATABASE_URL=postgresql+psycopg://adi:<POSTGRES_PASSWORD>@db:5432/adi
+#
+# Compose reads a local ".env" file automatically for the ${VAR:-default} values below.
+# No real AI API key is required with the default mock providers.
+# For Gemini, set GEMINI_API_KEY and *_PROVIDER=gemini in .env.
+
+services:
+  api:
+    build: .
+    image: assistant-backend:dev
+    # All settings (Spotify, tools, device WebSocket, ...) come from .env if present.
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "${APP_PORT:-8000}:${APP_PORT:-8000}"
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_HOST: 0.0.0.0
+      APP_PORT: ${APP_PORT:-8000}
+      DATABASE_URL: ${DATABASE_URL:-}
+      STT_PROVIDER: ${STT_PROVIDER:-mock}
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      TTS_PROVIDER: ${TTS_PROVIDER:-mock}
+      ASSISTANT_NAME: ${ASSISTANT_NAME:-Adi}
+      WAKE_WORD: ${WAKE_WORD:-Adi}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      API_KEY: ${API_KEY:-}
+      MAX_AUDIO_BYTES: ${MAX_AUDIO_BYTES:-5000000}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_STT_MODEL: ${GEMINI_STT_MODEL:-gemini-3.5-transcribe}
+      GEMINI_LLM_MODEL: ${GEMINI_LLM_MODEL:-gemini-3.5-flash-lite}
+      GEMINI_TTS_MODEL: ${GEMINI_TTS_MODEL:-gemini-3.8-flash-lite-tts}
+      GEMINI_TTS_VOICE: ${GEMINI_TTS_VOICE:-Kore}
+      GEMINI_LLM_MAX_OUTPUT_TOKENS: ${GEMINI_LLM_MAX_OUTPUT_TOKENS:-1024}
+      GEMINI_LLM_TEMPERATURE: ${GEMINI_LLM_TEMPERATURE:-}
+      GEMINI_LLM_THINKING_LEVEL: ${GEMINI_LLM_THINKING_LEVEL:-}
+      GEMINI_STT_LANGUAGE_CODES: ${GEMINI_STT_LANGUAGE_CODES:-}
+      GEMINI_STT_MODE: ${GEMINI_STT_MODE:-VERBATIM}
+      GEMINI_TIMEOUT_SECONDS: ${GEMINI_TIMEOUT_SECONDS:-30}
+      # Keep the Spotify refresh token on a volume so it survives container rebuilds.
+      SPOTIFY_TOKEN_FILE: /srv/data/.spotify_token.json
+    volumes:
+      - adi-data:/srv/data
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    profiles: ["db"]
+    environment:
+      POSTGRES_USER: adi
+      POSTGRES_DB: adi
+      # Development default only - set POSTGRES_PASSWORD in .env for anything real.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-dev-only}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U adi -d adi"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  adi-data:
+  pgdata:
