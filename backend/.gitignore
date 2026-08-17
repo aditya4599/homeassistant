@@ -1,0 +1,36 @@
+# Secrets / local config
+.env
+.spotify_token.json
+.spotify_token.json.tmp
+*.token.json
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local databases / generated audio
+*.db
+*.sqlite3
+*.wav
+!tests/**/*.wav
+debug_audio/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Archive / OS junk
+__MACOSX/
+._*
+*.zip
